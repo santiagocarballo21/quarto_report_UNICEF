@@ -1,0 +1,227 @@
+---
+title: "UNICEF Report: Global Patterns in Violent Discipline"
+subtitle: "Data Analytics and Storytelling Report"
+author: "Santiago Carballo Sánchez"
+date: today
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    theme: flatly
+    toc: true
+    toc-location: left
+    toc-depth: 2
+    number-sections: true
+    smooth-scroll: true
+    page-layout: full
+    fig-align: center
+execute:
+  echo: true
+  warning: false
+  message: false
+jupyter: python3
+---
+
+# Introduction
+
+This report examines global patterns in violent discipline using UNICEF indicator data. The objective is to move beyond isolated values and present a clearer strategic picture of how this issue is distributed across countries, how it changes over time, and how it relates to broader social conditions. Rather than treating the issue as a single statistic, the report approaches it as a multidimensional child protection challenge with both geographic and developmental implications.
+
+The analysis is structured around four perspectives. First, it identifies the countries with the highest reported levels of violent discipline. Second, it evaluates whether the issue shows meaningful movement over time. Third, it explores whether there is an observable relationship between violent discipline and youth literacy. Finally, it maps the latest available country-level distribution to highlight where the issue is most visible geographically. Together, these visuals create a more complete and policy-relevant picture of the problem.
+
+# Data Preparation
+
+```{python}
+#| label: setup
+#| echo: false
+
+import polars as pl
+from plotnine import *
+import pandas as pd
+
+base_path = "/content/drive/MyDrive/unicef_report/"
+
+indicator2 = pl.read_csv(base_path + "data/unicef_indicator_2.csv")
+
+discipline = (
+    indicator2
+    .filter(pl.col("sex") == "Total")
+    .select([
+        "country",
+        "alpha_3_code",
+        "time_period",
+        "obs_value",
+        "sex"
+    ])
+    .rename({"obs_value": "discipline_value"})
+)
+
+latest_year = discipline.select(pl.max("time_period")).item()
+
+discipline_latest = discipline.filter(pl.col("time_period") == latest_year)
+
+```
+
+The report was prepared using polars for data transformation and plotnine for visualisation. To maintain consistency across charts, the analysis focuses on observations where sex is recorded as Total. This keeps the comparisons clearer and reduces unnecessary fragmentation in the visual output. The final structure was designed to balance technical clarity with narrative flow, so that each chart contributes directly to the overall story rather than appearing as a standalone output.
+
+# Visualisations
+
+## Bar Chart
+
+The first visual provides a ranking view of the countries with the highest latest reported levels of violent discipline. This perspective is useful because it makes the concentration of the issue immediately visible and allows for a straightforward comparison between national contexts. In practical terms, it helps identify where the problem appears most severe in the latest available observations.
+
+```{python}
+#| label: fig-bar
+#| fig-cap: "Top 10 countries by latest available violent discipline rate."
+
+top10 = (
+    discipline_latest
+    .sort("discipline_value", descending=True)
+    .head(10)
+)
+
+(
+    ggplot(
+        top10.to_pandas(),
+        aes(x="reorder(country, discipline_value)", y="discipline_value")
+    )
+    + geom_col()
+    + coord_flip()
+    + labs(
+        title="Countries with the highest reported violent discipline rates",
+        x="Country",
+        y="Percent of children"
+    )
+    + theme_minimal()
+)
+```
+
+## Time-Series Chart
+
+While the bar chart focuses on the latest country-level picture, the time-series chart shifts attention to movement over time. This is important because a single-year view can show where the issue is high, but not whether conditions are improving, worsening, or remaining broadly stable. By averaging the indicator across available observations by year, the chart offers a more strategic trend view.
+
+```{python}
+#| label: fig-time
+#| fig-cap: "Average violent discipline over time."
+
+discipline_ts = (
+    discipline
+    .group_by("time_period")
+    .agg(pl.mean("discipline_value").alias("avg_discipline"))
+    .sort("time_period")
+)
+
+(
+    ggplot(
+        discipline_ts.to_pandas(),
+        aes(x="time_period", y="avg_discipline")
+    )
+    + geom_line()
+    + geom_point()
+    + labs(
+        title="Trend in average violent discipline over time",
+        x="Year",
+        y="Average percent"
+    )
+    + theme_minimal()
+)
+```
+
+## Scatterplot
+
+The next step in the analysis is to move from description to relationship. The scatterplot compares youth literacy and violent discipline to test whether countries with stronger educational outcomes also tend to report different levels of violent discipline. The regression line does not prove causality, but it does help reveal whether the two indicators move together in a consistent way across the observed cases.
+
+```{python}
+#| label: fig-scatter
+#| fig-cap: "Relationship between youth literacy and violent discipline."
+
+indicator1 = pl.read_csv(base_path + "data/unicef_indicator_1.csv")
+
+literacy = (
+    indicator1
+    .filter(pl.col("sex") == "Total")
+    .select([
+        "country",
+        "alpha_3_code",
+        "time_period",
+        "obs_value",
+        "sex"
+    ])
+    .rename({"obs_value": "literacy_value"})
+)
+
+scatter_df = (
+    discipline
+    .join(
+        literacy,
+        on=["country", "alpha_3_code", "time_period", "sex"],
+        how="inner"
+    )
+)
+
+(
+    ggplot(
+        scatter_df.to_pandas(),
+        aes(x="literacy_value", y="discipline_value")
+    )
+    + geom_point(alpha=0.6)
+    + geom_smooth(method="lm", se=False)
+    + labs(
+        title="Relationship between youth literacy and violent discipline",
+        x="Youth literacy rate (%)",
+        y="Violent discipline (%)"
+    )
+    + theme_minimal()
+)
+```
+
+## World Map
+
+The final visual returns to the geographic perspective and shows the latest available distribution of violent discipline across countries. This format is particularly effective for awareness-focused reporting because it reveals spatial concentration that can be harder to detect in tables or rankings alone. It also reinforces the idea that child protection outcomes are not evenly distributed, and that geography remains an important part of the story.
+
+```{python}
+#| label: fig-map
+#| fig-cap: "Latest available prevalence of violent discipline by country."
+
+import geopandas as gpd
+
+url = "https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json"
+world = gpd.read_file(url)
+world = world.rename(columns={"id": "alpha_3_code", "name": "country"})
+
+discipline_latest = (
+    discipline
+    .sort(["alpha_3_code", "time_period"])
+    .group_by("alpha_3_code")
+    .agg([
+        pl.col("country").last().alias("country"),
+        pl.col("time_period").last().alias("time_period"),
+        pl.col("discipline_value").last().alias("discipline_value")
+    ])
+)
+
+discipline_latest_pd = discipline_latest.to_pandas()
+
+map_df = world.merge(
+    discipline_latest_pd,
+    on="alpha_3_code",
+    how="left"
+)
+
+(
+    ggplot(map_df)
+    + geom_map(aes(fill="discipline_value"), color="white", size=0.1)
+    + scale_fill_continuous(name="Percent", na_value="lightgrey")
+    + labs(
+        title="Global distribution of violent discipline",
+        subtitle="Latest available observation by country",
+        caption="Source: UNICEF indicators"
+    )
+    + theme_minimal()
+)
+```
+
+# Conclusion
+
+Violent discipline remains a global issue, but the evidence in this report shows that it is far from uniform. The country ranking, the time trend, the relationship analysis, and the world map all point to the same broad conclusion: child protection outcomes vary substantially across contexts, and these differences are meaningful. Some countries appear under much greater pressure than others, and the pattern over time suggests that the issue cannot be understood through a single snapshot alone.
+
+From an awareness and policy perspective, the report supports a clear message. Violent discipline should be understood not only as a household-level issue, but also as a development challenge shaped by broader social conditions. Presenting the issue through multiple analytical angles makes that reality easier to communicate and helps turn raw indicator values into a more coherent public narrative.
